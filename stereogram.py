@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import random
 import colorsys
 
+from numba import jit
 import numpy as np
 from PIL import Image
 
@@ -10,7 +10,36 @@ from PIL import Image
 
 # http://www.techmind.org/stereo/stech.html
 
+@jit
+def _make_links(depth, link_l, link_r, maxsep, oversample=1):
+    """
+    The core of pixel link builder
+    """
+
+    dy, dx = depth.shape
+
+    # Active range
+    x0 = oversample * (maxsep // 2 + 1)
+    x1 = oversample * (dx - maxsep // 2)
+    xm = oversample * dx
+
+    # Make links
+    for y in range(dy):
+        for x in range(x0, x1):
+
+            s = depth[y, x // oversample]
+            l = x - s // 2
+            r = l + s
+ 
+            if l >= 0 and r < xm:
+                link_l[y, r] = l
+                link_r[y, l] = r
+
+
 def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
+    """
+    Make pixel links
+    """
 
     dy, dx = depth.shape
     link_l = np.tile(np.arange(0, dx * oversample, dtype=np.int16), (dy, 1))
@@ -38,106 +67,89 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
     depth = oversample * dpi / 2.54 * k * depth / (depth + view_dist) * eye_sep + 0.5
     depth = np.clip(depth, 0, None).astype(np.int32)
 
-    dmin  = np.min(depth.flatten()) // oversample
-    dmax  = np.max(depth.flatten()) // oversample
+    dmin  = int(np.floor(np.min(depth.flatten()) / oversample))
+    dmax  = int(np.ceil( np.max(depth.flatten()) / oversample))
     print(f" disparity : [{dmin}, {dmax}]")
 
-    # Active range
-    x0 = oversample * (maxsep // 2 + 1)
-    x1 = oversample * (dx - maxsep // 2)
-    xm = oversample * dx
+    # Build the links
+    _make_links(depth, link_l, link_r, maxsep, oversample)
 
-    # Make links
-    for y in range(dy):
-        for x in range(x0, x1):
-
-            s = depth[y, x // oversample]
-            l = x - s // 2
-            r = x + s
- 
-            if l >= 0 and r < xm:
-                link_l[y, r] = l
-                link_r[y, l] = r
-
-    return link_l, link_r
-
+    return (link_l, link_r), maxsep
 
 # =============================================================================
 
-def render(links, contrast=1):
+@jit
+def _render(link_l, link_r, pattern, oversample, direction="both"):
 
-    image = np.empty_like(links, dtype=np.uint8)
-    dy, dx = image.shape
+    base  = np.zeros((*link_l.shape, 3), dtype=np.uint8)
+    index = np.zeros_like(link_l, dtype=np.int32)
 
-    # Render
-    for y in range(dy):
-        for x in range(dx):
-
-            l = links[y, x]
-            if l == x:
-                image[y, x] = random.randint(0, 255)
-            else:
-                image[y, x] = image[y, l]
-
-    # Increase contrast
-    if contrast != 1:
-        image = image.astype(np.int32)
-        image = image - 128
-        image = image * contrast
-        image = np.clip(image, -128, +127)
-        image = image + 128
-        image = image.astype(np.uint8)
-
-    return image
-
-
-def render2(link_l, link_r, contrast=1, colorize_links=False):
-
-    base  = np.zeros_like(link_l, dtype=np.uint8)
-    index = np.zeros_like(base, dtype=np.int32)
-
-    dy, dx = base.shape
+    dy, dx, _ = base.shape
     cx = dx // 2
 
+    py, px, _ = pattern.shape
+
     # Render
     for y in range(dy):
 
-        for x in range(cx, dx):
-            l = link_l[y, x]
-            if l == x or base[y, l] == 0:
-                base[y, x] = random.randint(1, 255)
-            else:
-                base[y, x] = base[y, l]
-                index[y, x] = index[y, l] + 1
+        # Left to right
+        if direction == "right":
 
-        for x in reversed(range(0, cx)):
-            r = link_r[y, x]
-            if r == x or base[y, r] == 0:
-                base[y, x] = random.randint(1, 255)
-            else:
-                base[y, x] = base[y, r]
-                index[y, x] = index[y, r] + 1
+            for x in range(dx):
+                l = link_l[y, x]
+                if l == x or base[y, l].all() == 0:
+                    base[y, x] = pattern[y, x % px]
+                else:
+                    base[y, x] = base[y, l]
+                    index[y, x] = index[y, l] + 1
 
-    # Increase contrast
-    if contrast != 1:
-        base = base.astype(np.int32)
-        base = base - 128
-        base = base * contrast
-        base = np.clip(base, -128, +127)
-        base = base + 128
-        base = base.astype(np.uint8)
+        # Right to left
+        elif direction == "left":
 
-    if not colorize_links:
-        return base
+            for x in range(dx - 1, -1, -1):
+                r = link_r[y, x]
+                if r == x or base[y, r].all() == 0:
+                    base[y, x] = pattern[y, (dx - x) % px]
+                else:
+                    base[y, x] = base[y, r]
+                    index[y, x] = index[y, r] + 1
+
+        # Both ways 
+        elif direction == "both":
+
+            for xl in range(cx, dx):
+                xr = dx - 1 - xl
+
+                l = link_l[y, xl]
+                if l == x or base[y, l].all() == 0:
+                    base[y, xl] = pattern[y, xl % px]
+                else:
+                    base[y, xl] = base[y, l]
+                    index[y, xl] = index[y, l] + 1
+
+                r = link_r[y, xr]
+                if r == x or base[y, r].all() == 0:
+                    base[y, xr] = pattern[y, xr % px]
+                else:
+                    base[y, xr] = base[y, r]
+                    index[y, xr] = index[y, r] + 1
+
+    return base, index
+
+#@jit # Unsupported colorsys
+def _colorize(base, index):
 
     # Color by pixel repetitions
+    base = np.sum(base, axis=2) // 3
+    dy, dx = base.shape
+
     image = np.empty((dy, dx, 3), dtype=np.uint8)
     n = np.max(index.flatten())
 
     for y in range(dy):
         for x in range(dx):
-            h = index[y, x]    / n
-            l = base[y, x] / 255.0
+            h = index[y, x] / (n + 1)
+            l = base[y, x]  / 255.0
             s = 0.5
 
             c = colorsys.hls_to_rgb(h, l, s)
@@ -146,52 +158,37 @@ def render2(link_l, link_r, contrast=1, colorize_links=False):
     return image
 
 
-def render_links(links, contrast=1):
+def render(link_l, link_r, pattern=None, oversample=1, direction="both", colorize_links=False):
 
-    import colorsys
+    # Pattern not provided, randomize it to effectively get an RDS
+    if pattern is None:
 
-    dy, dx = links.shape
+        dy, dx = link_l.shape
 
-    image = np.empty((dy, dx, 3), dtype=np.uint8)
-    index = np.zeros_like(links, dtype=np.int32)
+        pattern = np.random.rand(dy, (oversample * dx) // 2) # Assume maxsep < width
+        pattern = (pattern * 255.0).astype(np.uint8)
+        pattern = (pattern // oversample) * oversample # Quantize
+        pattern = np.tile(pattern[:, :, None], (1, 1, 3)) # Make RGB
 
-    # Render, count repetitions
-    for y in range(dy):
-        for x in range(dx):
+    # Ensure no zeros in the pattern
+    pattern = np.clip(pattern, 1, None)
 
-            l = links[y, x]
-            if l == x:
-                image[y, x, 0] = random.randint(0, 255)
-                index[y, x]    = 0
-            else:
-                image[y, x] = image[y, l]
-                index[y, x] = index[y, l] + 1
+    # Render
+    base, index = _render(link_l, link_r, pattern, oversample, direction)
 
-    # Increase contrast
-    if contrast != 1:
-        image = image.astype(np.int32)
-        image = image - 128
-        image = image * contrast
-        image = np.clip(image, -128, +127)
-        image = image + 128
-        image = image.astype(np.uint8)
+    # Colorize
+    if colorize_links:
+        return _colorize(base, index)
 
-    # Color by pixel repetitions
-    n = np.max(index.flatten())
-    for y in range(dy):
-        for x in range(dx):
-            h = index[y, x]    / n
-            l = image[y, x, 0] / 255.0
-            s = 0.5
-
-            c = colorsys.hls_to_rgb(h, l, s)
-            image[y, x, :] = np.array(c) * 255.0
-
-    return image
+    return base
 
 # =============================================================================
 
 def fit_image(image, width, height):
+    """
+    Crops & resized the input image to fit in width x height while preserving
+    its aspect.
+    """
 
     src_aspect = image.width / image.height
     dst_aspect = width / height
@@ -200,8 +197,7 @@ def fit_image(image, width, height):
 
         # Scale
         h = int(width / src_aspect + 0.5)
-        m = Image.Resampling.BILINEAR if h > height else Image.Resampling.BOX
-        image = image.resize((width, h), m)
+        image = image.resize((width, h), Image.Resampling.LANCZOS)
 
         # Pad
         pad = height - image.height
@@ -218,8 +214,7 @@ def fit_image(image, width, height):
 
         # Scale
         w = int(height * src_aspect + 0.5)
-        m = Image.Resampling.BILINEAR if w > width else Image.Resampling.BOX
-        image = image.resize((w, height), m)
+        image = image.resize((w, height), Image.Resampling.LANCZOS)
 
         # Pad
         pad = width - image.width
@@ -244,6 +239,12 @@ def main():
         "depth",
         type=str,
         help="Input depth map",
+    )
+    parser.add_argument(
+        "--pattern",
+        type=str,
+        default=None,
+        help="Tileable pattern image",
     )
     parser.add_argument(
         "--oversample",
@@ -304,6 +305,13 @@ def main():
         help="Display point scale",
     )
     parser.add_argument(
+        "-d", "--direction",
+        type=str,
+        choices=["left", "right", "both"],
+        default="both",
+        help="Rendering direction"
+    )
+    parser.add_argument(
         "--show-links",
         action="store_true",
         help="Colorize pixel repetitions",
@@ -330,16 +338,12 @@ def main():
     # Scale
     if args.scale is not None:
         scale = args.scale / args.pscale
-        if scale > 1.0:
-            mode = Image.Resampling.BILINEAR
-        else:
-            mode = Image.Resampling.NEAREST
 
         print("Scaling...")
         img = img.resize((
             int(img.width  * scale + 0.5),
             int(img.height * scale + 0.5)),
-            mode
+            Image.Resampling.LANCZOS
         )
         print(f" {img.width}x{img.height}")
 
@@ -352,6 +356,16 @@ def main():
     assert depth.ndim in [2, 3], depth.ndim
     if depth.ndim == 3:
         depth = np.average(depth, axis=2)
+
+    # Load pattern
+    if args.pattern:
+        print(f"Loading pattern '{args.pattern}'")
+        pattern = Image.open(args.pattern)
+        print(f" {pattern.width}x{pattern.height}")
+
+    else:
+        pattern = None
+        
 
     print("Processing...")
 
@@ -369,22 +383,54 @@ def main():
 
     # Make links
     print("Making links...")
-    link_l, link_r = make_links(depth, **params)
+    (link_l, link_r), maxsep = make_links(depth, **params)
+
+    # Scale pattern
+    if pattern:
+
+        print("Scaling pattern...")
+
+        # Fit width
+        dx = (maxsep * args.oversample)
+        dy = int(maxsep * pattern.height / pattern.width)
+
+        pat = pattern.resize((dx, dy), Image.Resampling.LANCZOS)
+
+        # Tile vertically
+        pattern = Image.new("RGB", (dx, depth.shape[0]))
+        for i in range(depth.shape[0] // dy + 1):
+            pattern.paste(pat, (0, i * dy))
+
+        print(f" {pattern.width // args.oversample}x{pattern.height}")
+
+        # Convert
+        pattern = np.array(pattern)
+
     # Render
     print("Rendering...")
-#    if args.show_links:
-#        image = render_links(link_l, args.oversample)
-#    else:
-#        image = render(link_l, args.oversample)
-    image = render2(link_l, link_r, args.oversample, colorize_links=args.show_links)
+    image = render(link_l, link_r,
+        pattern=pattern,
+        direction=args.direction,
+        oversample=args.oversample,
+        colorize_links=args.show_links
+    )
 
     # Downscale & save
     print("Scaling...")
     img = Image.fromarray(image)
-    img = img.resize(
-        ((args.pscale * img.width) // args.oversample, args.pscale * img.height),
-        Image.Resampling.BOX
-    )
+
+    if args.oversample > 1:
+        img = img.resize(
+            (img.width // args.oversample, img.height),
+            Image.Resampling.LANCZOS
+        )
+
+    if args.pscale != 1:
+        img = img.resize(
+            (args.pscale * img.width, args.pscale * img.height),
+            Image.Resampling.NEAREST
+        )
+
     print(f" {img.width}x{img.height}")
 
     print("Saving...")
