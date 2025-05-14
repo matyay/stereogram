@@ -316,6 +316,18 @@ def main():
         action="store_true",
         help="Colorize pixel repetitions",
     )
+    parser.add_argument(
+        "-b", "--brightness",
+        type=float,
+        default=0.0,
+        help="Brightness adjust (from -1.0 to +1.0)",
+    )
+    parser.add_argument(
+        "-g", "--gamma",
+        type=float,
+        default=1.0,
+        help="Gamma",
+    )
 
     args = parser.parse_args()
 
@@ -415,7 +427,17 @@ def main():
         colorize_links=args.show_links
     )
 
-    # Downscale & save
+    # Postprocess
+    brightness = max(-1.0, min(args.brightness, 1.0))
+
+    image  = image.astype(np.float32) / 255.0
+    image += brightness
+    image  = np.clip(image, 0.0, 1.0)
+    image  = np.power(image, 1.0 / args.gamma)
+    image  = np.clip(image, 0.0, 1.0)
+    image  = (image * 255.0).astype(np.uint8)
+
+    # Downscale
     print("Scaling...")
     img = Image.fromarray(image)
 
@@ -433,9 +455,10 @@ def main():
 
     print(f" {img.width}x{img.height}")
 
+    # Save
     print("Saving...")
     fname = "stereogram.png" if args.out is None else args.out
-    img.save(fname)
+    img.save(fname, dpi=(params["dpi"], params["dpi"]))
 
 if __name__ == "__main__":
     main()
