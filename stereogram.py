@@ -31,9 +31,38 @@ def _make_links(depth, link_l, link_r, maxsep, oversample=1):
             l = x - s // 2
             r = l + s
  
-            if l >= 0 and r < xm:
-                link_l[y, r] = l
-                link_r[y, l] = r
+            if l < 0 and r >= xm:
+                continue
+
+            # Previous right to left link present
+            if link_l[y, r] != r:
+                prev_l = link_l[y, r]
+                prev_s = np.abs(prev_l - r)
+
+                # Previous depth is farther from the viewer, unlink
+                if s < prev_s:
+                    link_l[y, r] = r
+                    link_r[y, prev_l] = prev_l
+                # Previous depth is closer, don't change
+                else:
+                    continue
+
+            # Previous left to right link present
+            if link_r[y, l] != l:
+                prev_r = link_r[y, l]
+                prev_s = np.abs(prev_r - l)
+
+                # Previous depth is farther from the viewer, unlink
+                if s < prev_s:
+                    link_l[y, prev_r] = prev_r
+                    link_r[y, l] = l
+                # Previous depth is closer, don't change
+                else:
+                    continue
+
+            # Make the link
+            link_l[y, r] = l
+            link_r[y, l] = r
 
 
 def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
