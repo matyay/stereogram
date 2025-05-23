@@ -76,14 +76,16 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
 
     # Beyond the screen
     if minz > 0.0 and maxz > 0.0:
+        minz, maxz = min(minz, maxz), max(minz, maxz)
         minsep = minz / (minz + view_dist) * eye_sep
         maxsep = maxz / (maxz + view_dist) * eye_sep
         k = 1.0
 
     # In front of the screen
     elif minz < 0.0 and maxz < 0.0:
-        minsep = -maxz / (maxz + view_dist) * eye_sep
-        maxsep = -minz / (minz + view_dist) * eye_sep
+        minz, maxz = max(-minz, -maxz), min(-minz, -maxz)
+        minsep = minz / (view_dist - minz) * eye_sep
+        maxsep = maxz / (view_dist - maxz) * eye_sep
         k = -1.0
 
     else:
@@ -103,7 +105,7 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
     # The input is distance
     else:
         depth = maxz + depth.astype(np.float32) * (minz - maxz) / 255.0
-        depth = oversample * dpi / 2.54 * k * depth / (depth + view_dist) * eye_sep + 0.5
+        depth = oversample * dpi / 2.54 * depth / (k * depth + view_dist) * eye_sep + 0.5
 
     depth = np.clip(depth, 0, None).astype(np.int32)
 
