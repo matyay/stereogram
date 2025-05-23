@@ -65,7 +65,7 @@ def _make_links(depth, link_l, link_r, maxsep, oversample=1):
             link_r[y, l] = r
 
 
-def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
+def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity = False):
     """
     Make pixel links
     """
@@ -74,16 +74,15 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
     link_l = np.tile(np.arange(0, dx * oversample, dtype=np.int16), (dy, 1))
     link_r = np.tile(np.arange(0, dx * oversample, dtype=np.int16), (dy, 1))
 
-    # De-normalize depth
-    depth = maxz + depth.astype(np.float32) * (minz - maxz) / 255.0
-
     # Beyond the screen
     if minz > 0.0 and maxz > 0.0:
+        minsep = minz / (minz + view_dist) * eye_sep
         maxsep = maxz / (maxz + view_dist) * eye_sep
         k = 1.0
 
     # In front of the screen
     elif minz < 0.0 and maxz < 0.0:
+        minsep = -maxz / (maxz + view_dist) * eye_sep
         maxsep = -minz / (minz + view_dist) * eye_sep
         k = -1.0
 
@@ -91,9 +90,21 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample):
         print(f"Invalid Z range [{minz}, {maxz}]")
         exit(-1)
 
+    minsep = int(minsep * dpi / 2.54 + 0.5)
     maxsep = int(maxsep * dpi / 2.54 + 0.5)
 
-    depth = oversample * dpi / 2.54 * k * depth / (depth + view_dist) * eye_sep + 0.5
+    print(f" d. range  : [{minsep}, {maxsep}]")
+
+    # The input is disparity
+    if disparity:
+        depth = minsep + (1.0 - depth.astype(np.float32) / 255.0) * (maxsep - minsep)
+        depth = oversample * k * depth
+
+    # The input is distance
+    else:
+        depth = maxz + depth.astype(np.float32) * (minz - maxz) / 255.0
+        depth = oversample * dpi / 2.54 * k * depth / (depth + view_dist) * eye_sep + 0.5
+
     depth = np.clip(depth, 0, None).astype(np.int32)
 
     dmin  = int(np.floor(np.min(depth.flatten()) / oversample))
@@ -346,6 +357,11 @@ def main():
         help="Colorize pixel repetitions",
     )
     parser.add_argument(
+        "--disparity",
+        action="store_true",
+        help="The input is disparity instead of distance",
+    )
+    parser.add_argument(
         "-b", "--brightness",
         type=float,
         default=0.0,
@@ -417,6 +433,7 @@ def main():
         "maxz":       args.z_range[1],
         "dpi":        args.dpi / args.pscale,
         "oversample": args.oversample,
+        "disparity":  args.disparity,
     }
 
     for k, v in params.items():
