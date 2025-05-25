@@ -11,7 +11,7 @@ from PIL import Image
 # http://www.techmind.org/stereo/stech.html
 
 @jit
-def _make_links(depth, link_l, link_r, maxsep, oversample=1):
+def _make_links(depth, link_l, link_r, maxsep, oversample=1, invert_occlusion = False):
     """
     The core of pixel link builder
     """
@@ -40,7 +40,10 @@ def _make_links(depth, link_l, link_r, maxsep, oversample=1):
                 prev_s = np.abs(prev_l - r)
 
                 # Previous depth is farther from the viewer, unlink
-                if s < prev_s:
+                pred = s < prev_s
+                if invert_occlusion:
+                    pred = not pred
+                if pred:
                     link_l[y, r] = r
                     link_r[y, prev_l] = prev_l
                 # Previous depth is closer, don't change
@@ -53,7 +56,10 @@ def _make_links(depth, link_l, link_r, maxsep, oversample=1):
                 prev_s = np.abs(prev_r - l)
 
                 # Previous depth is farther from the viewer, unlink
-                if s < prev_s:
+                pred = s < prev_s
+                if invert_occlusion:
+                    pred = not pred
+                if pred:
                     link_l[y, prev_r] = prev_r
                     link_r[y, l] = l
                 # Previous depth is closer, don't change
@@ -80,6 +86,7 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
         minsep = minz / (minz + view_dist) * eye_sep
         maxsep = maxz / (maxz + view_dist) * eye_sep
         k = 1.0
+        invert_occlusion = False
 
     # In front of the screen
     elif minz < 0.0 and maxz < 0.0:
@@ -87,6 +94,7 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
         minsep = minz / (view_dist - minz) * eye_sep
         maxsep = maxz / (view_dist - maxz) * eye_sep
         k = -1.0
+        invert_occlusion = True
 
     else:
         print(f"Invalid Z range [{minz}, {maxz}]")
@@ -113,8 +121,11 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
     dmax  = int(np.ceil( np.max(depth.flatten()) / oversample))
     print(f" disparity : [{dmin}, {dmax}]")
 
+    if dmin * 2 < dmax:
+        print("WARNING: Disparity ambiguiuty!")
+
     # Build the links
-    _make_links(depth, link_l, link_r, maxsep, oversample)
+    _make_links(depth, link_l, link_r, maxsep, oversample, invert_occlusion)
 
     return (link_l, link_r), maxsep
 
