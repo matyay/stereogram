@@ -365,6 +365,12 @@ def main():
         help="Rendering direction"
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RNG Seed",
+    )
+    parser.add_argument(
         "--show-links",
         action="store_true",
         help="Colorize pixel repetitions",
@@ -392,6 +398,10 @@ def main():
     if args.scale is not None and args.fit is not None:
         print("Use either --scale or --fit")
         exit(1)
+
+    # Seed the RNG
+    if args.seed is not None:
+        np.random.seed(args.seed)
 
     # Load depth map
     print(f"Loading depth map '{args.depth}'...")
