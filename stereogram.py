@@ -5,6 +5,7 @@ import colorsys
 from numba import jit
 import numpy as np
 from PIL import Image
+from PIL import ImageDraw
 
 # =============================================================================
 
@@ -127,7 +128,7 @@ def make_links(depth, eye_sep, view_dist, minz, maxz, dpi, oversample, disparity
     # Build the links
     _make_links(depth, link_l, link_r, maxsep, oversample, invert_occlusion)
 
-    return (link_l, link_r), maxsep
+    return (link_l, link_r), (minsep, maxsep)
 
 # =============================================================================
 
@@ -234,6 +235,16 @@ def render(link_l, link_r, pattern=None, oversample=1, direction="both", coloriz
         return _colorize(base, index)
 
     return base
+
+
+def draw_focus_aids(img, sep, size):
+
+    x0 = img.width // 2
+    y0 = int(0.75 * size)
+
+    draw = ImageDraw.Draw(img)
+    draw.circle((x0 - sep // 2, y0), size // 2, fill = 0, outline = (255, 255, 255), width = 1)
+    draw.circle((x0 + sep // 2, y0), size // 2, fill = 0, outline = (255, 255, 255), width = 1)
 
 # =============================================================================
 
@@ -392,6 +403,11 @@ def main():
         default=1.0,
         help="Gamma",
     )
+    parser.add_argument(
+        "--focus-aids",
+        action="store_true",
+        help="Draw focus aids",
+    )
 
     args = parser.parse_args()
 
@@ -464,7 +480,7 @@ def main():
 
     # Make links
     print("Making links...")
-    (link_l, link_r), maxsep = make_links(depth, **params)
+    (link_l, link_r), (minsep, maxsep) = make_links(depth, **params)
 
     # Scale pattern
     if pattern:
@@ -523,6 +539,10 @@ def main():
         )
 
     print(f" {img.width}x{img.height}")
+
+    # Draw focus aids
+    if args.focus_aids:
+        draw_focus_aids(img, maxsep, 0.5 * (args.dpi / 2.54))
 
     # Save
     print("Saving...")
