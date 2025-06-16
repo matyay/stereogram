@@ -542,7 +542,7 @@ def main():
 
     # Draw focus aids
     if args.focus_aids:
-        draw_focus_aids(img, maxsep, 0.5 * (args.dpi / 2.54))
+        draw_focus_aids(img, maxsep * args.pscale, 0.5 * (args.dpi / 2.54))
 
     # Save
     print("Saving...")
